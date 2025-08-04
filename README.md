@@ -1,1 +1,1 @@
-# Template-Matching-and-Regression
+# Few-Shot Pattern Detection via Template Matching and Regression
