@@ -6,7 +6,8 @@
 **Yunseon Choi**,
 [**Minsu Cho**](https://cvlab.postech.ac.kr/~mcho/)
 
-Official implementation of "Few-Shot Pattern Detection via Template Matching and Regression", ✨ ICCV 2025 (Highlight) ✨
+Official implementation of "Few-Shot Pattern Detection via Template Matching and Regression", <br> 
+✨ ICCV 2025 (Highlight) ✨
 
 </div>
 
