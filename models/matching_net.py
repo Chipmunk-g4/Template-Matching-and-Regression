@@ -41,41 +41,86 @@ class matching_net(nn.Module):
         self.objectness_head = ObjectnessHead(self.decoder_o.out_channels)
         self.ltrbs_head = BboxesHead(self.decoder_b.out_channels) if self.box_reg else None
 
-    def forward(self, sample, exemplars, **kwargs):
-
+    def _encode_and_project(self, sample):
+        """Shared encoder + projection + optional upsample."""
         f = self.encoder(sample)
         if not isinstance(f, list):
             f = [f]
-
         if self.feature_upsample:
-            f = [F.interpolate(f_, scale_factor=2, mode='bilinear', align_corners=False) for f_ in f]       
+            f = [F.interpolate(f_, scale_factor=2, mode='bilinear', align_corners=False) for f_ in f]
+        fps = [self.input_proj[i](f[i]) for i in range(len(f))]
+        return f, fps
+
+    def _heads(self, fp, f_TM):
+        """Run fusion + decoder + objectness/regression heads on one feature level."""
+        if self.fusion:
+            f_cat = torch.cat([fp, f_TM], dim=1)
+        else:
+            f_cat = f_TM
+
+        if self.box_reg:
+            f_box = self.decoder_b(f_cat)
+            b = self.ltrbs_head(f_box)
+        else:
+            b = None
+
+        f_obj = self.decoder_o(f_cat)
+        o = self.objectness_head(f_obj)
+        return o, b, F.relu(f_TM)
+
+    def forward(self, sample, exemplars, **kwargs):
+
+        f, fps = self._encode_and_project(sample)
 
         os, bs, f_TMs = [], [], []
         for i in range(len(f)):
-            
-            fp = self.input_proj[i](f[i])
+            fp = fps[i]
 
             if self.matcher is None:
                 f_TM = fp
             else:
                 f_TM = self.matcher(fp, exemplars)
 
-            if self.fusion:
-                f_cat = torch.cat([fp, f_TM], dim=1)
-            else:
-                f_cat = f_TM
-
-            if self.box_reg:
-                f_box = self.decoder_b(f_cat)
-                b = self.ltrbs_head(f_box)
-            else:
-                b = None
-
-            f_obj = self.decoder_o(f_cat)
-            o = self.objectness_head(f_obj)
-
+            o, b, f_TM_relu = self._heads(fp, f_TM)
             os.append(o)
             bs.append(b)
-            f_TMs.append(F.relu(f_TM))
+            f_TMs.append(f_TM_relu)
+
+        return os, bs, f_TMs, f[0]
+
+    def extract_templates(self, sample, exemplars):
+        """Phase 1 of tiled inference: extract template features from a crop
+        that contains the exemplar. Returns a list (per feature level) of
+        lists (per batch item) of template tensors."""
+        if self.matcher is None:
+            return None
+
+        _, fps = self._encode_and_project(sample)
+        templates_per_level = []
+        for fp in fps:
+            templates = self.matcher.extract_template_only(fp, exemplars)
+            templates_per_level.append(templates)
+        return templates_per_level
+
+    def forward_with_templates(self, sample, templates_per_level):
+        """Phase 2 of tiled inference: run matching + heads using
+        pre-extracted templates. `templates_per_level` is the output of
+        `extract_templates()`.  Returns the same tuple as `forward()`."""
+        f, fps = self._encode_and_project(sample)
+
+        os, bs, f_TMs = [], [], []
+        for i in range(len(f)):
+            fp = fps[i]
+
+            if self.matcher is None or templates_per_level is None:
+                f_TM = fp
+            else:
+                f_TM = self.matcher.match_with_template(fp, templates_per_level[i])
+                f_TM = f_TM * self.matcher.scale
+
+            o, b, f_TM_relu = self._heads(fp, f_TM)
+            os.append(o)
+            bs.append(b)
+            f_TMs.append(f_TM_relu)
 
         return os, bs, f_TMs, f[0]

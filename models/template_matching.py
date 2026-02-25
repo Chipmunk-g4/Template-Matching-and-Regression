@@ -92,6 +92,34 @@ class TemplateMatching(nn.Module):
 
         return f
 
+    def extract_template_only(self, sample, exemplars):
+        """Extract template features from a sample containing the exemplar.
+        Returns a list of template tensors (one per batch item).
+        Used for two-phase tiled inference."""
+        bs, _, H, W = sample.shape
+
+        templates = []
+        for B in range(bs):
+            now_f = sample[B].unsqueeze(0)
+            exemplar_coord = exemplars[B][0]
+            template = self.extract_function(now_f, exemplar_coord)
+            templates.append(template)
+        return templates
+
+    def match_with_template(self, sample, templates):
+        """Run template matching using pre-extracted template tensors.
+        `templates` is a list of template tensors (one per batch item).
+        Used for two-phase tiled inference."""
+        bs, _, H, W = sample.shape
+
+        matching_score_maps = []
+        for B in range(bs):
+            now_f = sample[B].unsqueeze(0)
+            now_f = self.matching_algorithm(now_f, templates[B])
+            matching_score_maps.append(now_f)
+        f = torch.concat(matching_score_maps, dim=0)
+        return f
+
     def forward(self, feature, exemplars):
         f = self.matcher(feature, exemplars)
         f = f * self.scale
